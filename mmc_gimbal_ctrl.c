@@ -267,21 +267,6 @@ void try_parse_can_info(uint8_t* data , uint8_t size){
 	}else buf_len = 0;
 }
 
-void print_usage(char *prg)
-{
-	fprintf(stderr, "\nUsage: %s [options] <CAN interface>+\n", prg);
-	fprintf(stderr, "  (use CTRL-C to terminate %s)\n\n", prg);
-	fprintf(stderr, "Key function: \n");
-	fprintf(stderr, "	w:          control the pitch 	up		of the gimbal\n");
-	fprintf(stderr, "   s:          control the pitch 	down	of the gimbal\n");
-	fprintf(stderr, "   a:          control the yaw		left  	of the gimbal\n");
-	fprintf(stderr, "   d:          control the yaw  	right 	of the gimbal\n");
-	fprintf(stderr, "   z:          control the zoom 	in 		of the gimbal\n");
-	fprintf(stderr, "   x:          control the zomm 	out 	of the gimbal\n");
-	fprintf(stderr, "   q:         	exit\n");
-	fprintf(stderr, "===Author:MMC ChrisRiz====\n");
-}
-
 int idx2dindex(int ifidx, int socket) {
 
 	int i;
@@ -342,7 +327,7 @@ int main(int argc, char **argv)
 	int opt, ret;
 	int  numfilter;
 	int join_filter;
-	char *ptr, *nptr;
+	char *ptr;
 	struct sockaddr_can addr;
 	char ctrlmsg[CMSG_SPACE(sizeof(struct timeval) + 3*sizeof(struct timespec) + sizeof(__u32))];
 	struct iovec iov;
@@ -350,27 +335,8 @@ int main(int argc, char **argv)
 	struct ifreq ifr;
 	struct timeval  *timeout_current = NULL;
 
-	print_usage(basename(argv[0]));
-
-	while ((opt = getopt(argc, argv, "t:HciaSs:b:B:u:lDdxLn:r:heT:?")) != -1) {
-		switch (opt) {
-		case 't':
-			break;
-
-		default:
-			print_usage(basename(argv[0]));
-			exit(1);
-			break;
-		}
-	}
-
-	if (optind == argc) {
-		print_usage(basename(argv[0]));
-		exit(0);
-	}
 	{
 		ptr = "can0";
-		nptr = strchr(ptr, ',');
 
 #ifdef DEBUG
 		printf("open %d '%s'.\n", i, ptr);
@@ -384,10 +350,7 @@ int main(int argc, char **argv)
 
 		cmdlinename = ptr; /* save pointer to cmdline name of this socket */
 
-		if (nptr)
-			nbytes = nptr - ptr;  /* interface name is up the first ',' */
-		else
-			nbytes = strlen(ptr); /* no ',' found => no filter definitions */
+		nbytes = strlen(ptr); /* no ',' found => no filter definitions */
 
 		if (nbytes >= IFNAMSIZ) {
 			fprintf(stderr, "name of CAN device '%s' is too long!\n", ptr);
@@ -415,117 +378,16 @@ int main(int argc, char **argv)
 		} else
 			addr.can_ifindex = 0; /* any can interface */
 
-		if (nptr) {
-
-			/* found a ',' after the interface name => check for filters */
-
-			/* determine number of filters to alloc the filter space */
-			numfilter = 0;
-			ptr = nptr;
-			while (ptr) {
-				numfilter++;
-				ptr++; /* hop behind the ',' */
-				ptr = strchr(ptr, ','); /* exit condition */
-			}
-
-			rfilter = malloc(sizeof(struct can_filter) * numfilter);
-			if (!rfilter) {
-				fprintf(stderr, "Failed to create filter space!\n");
-				return 1;
-			}
-
-			numfilter = 0;
-			err_mask = 0;
-			join_filter = 0;
-
-			while (nptr) {
-
-				ptr = nptr+1; /* hop behind the ',' */
-				nptr = strchr(ptr, ','); /* update exit condition */
-
-				if (sscanf(ptr, "%x:%x",
-					   &rfilter[numfilter].can_id, 
-					   &rfilter[numfilter].can_mask) == 2) {
- 					rfilter[numfilter].can_mask &= ~CAN_ERR_FLAG;
-					numfilter++;
-				} else if (sscanf(ptr, "%x~%x",
-						  &rfilter[numfilter].can_id, 
-						  &rfilter[numfilter].can_mask) == 2) {
- 					rfilter[numfilter].can_id |= CAN_INV_FILTER;
- 					rfilter[numfilter].can_mask &= ~CAN_ERR_FLAG;
-					numfilter++;
-				} else if (*ptr == 'j' || *ptr == 'J') {
-					join_filter = 1;
-				} else if (sscanf(ptr, "#%x", &err_mask) != 1) { 
-					fprintf(stderr, "Error in filter option parsing: '%s'\n", ptr);
-					return 1;
-				}
-			}
-
-			if (err_mask)
-				setsockopt(s, SOL_CAN_RAW, CAN_RAW_ERR_FILTER,
-					   &err_mask, sizeof(err_mask));
-
-			if (join_filter && setsockopt(s, SOL_CAN_RAW, CAN_RAW_JOIN_FILTERS,
-						      &join_filter, sizeof(join_filter)) < 0) {
-				perror("setsockopt CAN_RAW_JOIN_FILTERS not supported by your Linux Kernel");
-				return 1;
-			}
-
-			if (numfilter)
-				setsockopt(s, SOL_CAN_RAW, CAN_RAW_FILTER,
-					   rfilter, numfilter * sizeof(struct can_filter));
-
-			free(rfilter);
-
-		} /* if (nptr) */
-
 		/* try to switch the socket into CAN FD mode */
 		setsockopt(s, SOL_CAN_RAW, CAN_RAW_FD_FRAMES, &canfd_on, sizeof(canfd_on));
 
-		if (rcvbuf_size) {
-
-			int curr_rcvbuf_size;
-			socklen_t curr_rcvbuf_size_len = sizeof(curr_rcvbuf_size);
-
-			/* try SO_RCVBUFFORCE first, if we run with CAP_NET_ADMIN */
-			if (setsockopt(s, SOL_SOCKET, SO_RCVBUFFORCE,
-				       &rcvbuf_size, sizeof(rcvbuf_size)) < 0) {
-#ifdef DEBUG
-				printf("SO_RCVBUFFORCE failed so try SO_RCVBUF ...\n");
-#endif
-				if (setsockopt(s, SOL_SOCKET, SO_RCVBUF,
-					       &rcvbuf_size, sizeof(rcvbuf_size)) < 0) {
-					perror("setsockopt SO_RCVBUF");
-					return 1;
-				}
-
-				if (getsockopt(s, SOL_SOCKET, SO_RCVBUF,
-					       &curr_rcvbuf_size, &curr_rcvbuf_size_len) < 0) {
-					perror("getsockopt SO_RCVBUF");
-					return 1;
-				}
-
-				/* Only print a warning the first time we detect the adjustment */
-				/* n.b.: The wanted size is doubled in Linux in net/sore/sock.c */
-				if (!i && curr_rcvbuf_size < rcvbuf_size*2)
-					fprintf(stderr, "The socket receive buffer size was "
-						"adjusted due to /proc/sys/net/core/rmem_max.\n");
-			}
-		}
+		if (rcvbuf_size) {}
 
 		if (bind(s, (struct sockaddr *)&addr, sizeof(addr)) < 0) {
 			perror("bind");
 			return 1;
 		}
 	}
-
-//	// 初始化按键
-//	int keys_fd = open("/dev/input/event2",O_RDONLY|O_NONBLOCK);
-//	if(keys_fd <= 0){
-//		printf("open /dev/input/event2 error \n");
-//		return 0;
-//	}
 
 	//打开控制终端
 	int tty = open("/dev/tty", O_RDONLY | O_NONBLOCK);
@@ -543,6 +405,7 @@ int main(int argc, char **argv)
 	msg.msg_control = &ctrlmsg;
 
 	while (running) {
+
 		// 获取终端输入字符
 		//memset(channel_value,1500,sizeof(channel_value));
 		char ch = "";
@@ -581,22 +444,9 @@ int main(int argc, char **argv)
 		default:
 			break;
 		}
-//
-//		struct input_event event;
-//		// 获取按键事件
-//		if(read(keys_fd,&event,sizeof(event)) == sizeof(event)){
-//			switch(event.code){
-//			case KEY_Q:
-//				printf("key event key Q\n");
-//				break;
-//			default:
-//				break;
-//			}
-//		}
 
 		FD_ZERO(&rdfs);
-
-			FD_SET(s, &rdfs);
+		FD_SET(s, &rdfs);
 
 		if ((ret = select(s+1, &rdfs, NULL, NULL, timeout_current)) <= 0) {
 			printf("select");
@@ -654,8 +504,7 @@ int main(int argc, char **argv)
 		}
 	}
 
-
-		close(s);
+	close(s);
 
 	return 0;
 }
