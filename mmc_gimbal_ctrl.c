@@ -32,6 +32,7 @@
 
 #include "terminal.h"
 #include "lib.h"
+#define DEBUG
 
 #define MAXSOCK 16    /* max. number of CAN interfaces given on the cmdline */
 #define MAXIFNAMES 30 /* size of receive name index to omit ioctls */
@@ -39,7 +40,7 @@
 #define ANYDEV "any"  /* name of interface to receive from any CAN interface */
 #define ANL "\r\n"    /* newline in ASC mode */
 
-static char *cmdlinename[MAXSOCK];
+static char *cmdlinename;
 static char devname[MAXIFNAMES][IFNAMSIZ+1];
 static int  dindex[MAXIFNAMES];
 static int  max_devname_len; /* to prevent frazzled device name output */ 
@@ -330,15 +331,16 @@ int idx2dindex(int ifidx, int socket) {
 	return i;
 }
 
+
 int main(int argc, char **argv)
 {
 	fd_set rdfs;
-	int s[MAXSOCK];
+	int s;
 	unsigned char down_causes_exit = 1;
 	unsigned char view = 0;
 	int rcvbuf_size = 0;
 	int opt, ret;
-	int currmax, numfilter;
+	int  numfilter;
 	int join_filter;
 	char *ptr, *nptr;
 	struct sockaddr_can addr;
@@ -366,30 +368,21 @@ int main(int argc, char **argv)
 		print_usage(basename(argv[0]));
 		exit(0);
 	}
-
-	currmax = argc - optind; /* find real number of CAN devices */
-
-	if (currmax > MAXSOCK) {
-		fprintf(stderr, "More than %d CAN devices given on commandline!\n", MAXSOCK);
-		return 1;
-	}
-
-	for (i=0; i < currmax; i++) {
-
-		ptr = argv[optind+i];
+	{
+		ptr = "can0";
 		nptr = strchr(ptr, ',');
 
 #ifdef DEBUG
 		printf("open %d '%s'.\n", i, ptr);
 #endif
 
-		s[i] = socket(PF_CAN, SOCK_RAW, CAN_RAW);
-		if (s[i] < 0) {
+		s = socket(PF_CAN, SOCK_RAW, CAN_RAW);
+		if (s < 0) {
 			perror("socket");
 			return 1;
 		}
 
-		cmdlinename[i] = ptr; /* save pointer to cmdline name of this socket */
+		cmdlinename = ptr; /* save pointer to cmdline name of this socket */
 
 		if (nptr)
 			nbytes = nptr - ptr;  /* interface name is up the first ',' */
@@ -414,7 +407,7 @@ int main(int argc, char **argv)
 #endif
 
 		if (strcmp(ANYDEV, ifr.ifr_name)) {
-			if (ioctl(s[i], SIOCGIFINDEX, &ifr) < 0) {
+			if (ioctl(s, SIOCGIFINDEX, &ifr) < 0) {
 				perror("SIOCGIFINDEX");
 				exit(1);
 			}
@@ -470,17 +463,17 @@ int main(int argc, char **argv)
 			}
 
 			if (err_mask)
-				setsockopt(s[i], SOL_CAN_RAW, CAN_RAW_ERR_FILTER,
+				setsockopt(s, SOL_CAN_RAW, CAN_RAW_ERR_FILTER,
 					   &err_mask, sizeof(err_mask));
 
-			if (join_filter && setsockopt(s[i], SOL_CAN_RAW, CAN_RAW_JOIN_FILTERS,
+			if (join_filter && setsockopt(s, SOL_CAN_RAW, CAN_RAW_JOIN_FILTERS,
 						      &join_filter, sizeof(join_filter)) < 0) {
 				perror("setsockopt CAN_RAW_JOIN_FILTERS not supported by your Linux Kernel");
 				return 1;
 			}
 
 			if (numfilter)
-				setsockopt(s[i], SOL_CAN_RAW, CAN_RAW_FILTER,
+				setsockopt(s, SOL_CAN_RAW, CAN_RAW_FILTER,
 					   rfilter, numfilter * sizeof(struct can_filter));
 
 			free(rfilter);
@@ -488,7 +481,7 @@ int main(int argc, char **argv)
 		} /* if (nptr) */
 
 		/* try to switch the socket into CAN FD mode */
-		setsockopt(s[i], SOL_CAN_RAW, CAN_RAW_FD_FRAMES, &canfd_on, sizeof(canfd_on));
+		setsockopt(s, SOL_CAN_RAW, CAN_RAW_FD_FRAMES, &canfd_on, sizeof(canfd_on));
 
 		if (rcvbuf_size) {
 
@@ -496,18 +489,18 @@ int main(int argc, char **argv)
 			socklen_t curr_rcvbuf_size_len = sizeof(curr_rcvbuf_size);
 
 			/* try SO_RCVBUFFORCE first, if we run with CAP_NET_ADMIN */
-			if (setsockopt(s[i], SOL_SOCKET, SO_RCVBUFFORCE,
+			if (setsockopt(s, SOL_SOCKET, SO_RCVBUFFORCE,
 				       &rcvbuf_size, sizeof(rcvbuf_size)) < 0) {
 #ifdef DEBUG
 				printf("SO_RCVBUFFORCE failed so try SO_RCVBUF ...\n");
 #endif
-				if (setsockopt(s[i], SOL_SOCKET, SO_RCVBUF,
+				if (setsockopt(s, SOL_SOCKET, SO_RCVBUF,
 					       &rcvbuf_size, sizeof(rcvbuf_size)) < 0) {
 					perror("setsockopt SO_RCVBUF");
 					return 1;
 				}
 
-				if (getsockopt(s[i], SOL_SOCKET, SO_RCVBUF,
+				if (getsockopt(s, SOL_SOCKET, SO_RCVBUF,
 					       &curr_rcvbuf_size, &curr_rcvbuf_size_len) < 0) {
 					perror("getsockopt SO_RCVBUF");
 					return 1;
@@ -521,7 +514,7 @@ int main(int argc, char **argv)
 			}
 		}
 
-		if (bind(s[i], (struct sockaddr *)&addr, sizeof(addr)) < 0) {
+		if (bind(s, (struct sockaddr *)&addr, sizeof(addr)) < 0) {
 			perror("bind");
 			return 1;
 		}
@@ -602,18 +595,18 @@ int main(int argc, char **argv)
 //		}
 
 		FD_ZERO(&rdfs);
-		for (i=0; i<currmax; i++)
-			FD_SET(s[i], &rdfs);
 
-		if ((ret = select(s[currmax-1]+1, &rdfs, NULL, NULL, timeout_current)) <= 0) {
+			FD_SET(s, &rdfs);
+
+		if ((ret = select(s+1, &rdfs, NULL, NULL, timeout_current)) <= 0) {
 			printf("select");
 			running = 0;
 			continue;
 		}
 
-		for (i=0; i<currmax; i++) {  /* check all CAN RAW sockets */
+		{  /* check all CAN RAW sockets */
 
-			if (FD_ISSET(s[i], &rdfs)) {
+			if (FD_ISSET(s, &rdfs)) {
 				int idx;
 				/* these settings may be modified by recvmsg() */
 				iov.iov_len = sizeof(frame);
@@ -621,8 +614,8 @@ int main(int argc, char **argv)
 				msg.msg_controllen = sizeof(ctrlmsg);
 				msg.msg_flags = 0;
 
-				nbytes = recvmsg(s[i], &msg, MSG_DONTWAIT);
-				idx = idx2dindex(addr.can_ifindex, s[i]);
+				nbytes = recvmsg(s, &msg, MSG_DONTWAIT);
+				idx = idx2dindex(addr.can_ifindex, s);
 
 				if (nbytes < 0) {
 					if ((errno == ENETDOWN) && !down_causes_exit) {
@@ -654,15 +647,15 @@ int main(int argc, char **argv)
 				try_parse_can_info(frame.data,frame.len);
 
 				 // 旧挂载的调试
-//				ctrl_payload_old(s[i],data,10);
-				ctrl_payload_new(s[i],channel_value);
+//				ctrl_payload_old(s,data,10);
+				ctrl_payload_new(s,channel_value);
 				usleep(1000);
 			}
 		}
 	}
 
-	for (i=0; i<currmax; i++)
-		close(s[i]);
+
+		close(s);
 
 	return 0;
 }
