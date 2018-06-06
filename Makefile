@@ -6,7 +6,7 @@
 
 DESTDIR ?=
 PREFIX ?= /usr/local
-
+GCC = gcc
 MAKEFLAGS = -k
 
 CFLAGS    = -O2 -Wall -Wno-parentheses
@@ -20,21 +20,26 @@ CPPFLAGS += -Iinclude \
 
 PROGRAMS = mmc_gimbal_ctrl
 
-all: $(PROGRAMS)
-	mkdir -p bin
-	mv -f $(PROGRAMS) bin
+define all-c-files-under
+$(shell find $(1) -name "*."$(2) -and -not -name ".*" )
+endef
 
-clean:
-	rm -f $(PROGRAMS) *.o
-	rm -rf $(DESTDIR)bin
-	
+define all-subdir-c-files
+$(call all-c-files-under,.,"c")
+endef
 
-install:
-	mkdir -p $(DESTDIR)$(PREFIX)/bin
-	cp -f $(PROGRAMS) $(DESTDIR)$(PREFIX)/bin
+CSRCS	 = $(call all-subdir-c-files)
 
-distclean:
-	rm -f $(PROGRAMS) $(LIBRARIES) *.o *~
+COBJS	:= $(CSRCS:.c=.o)
 
-mmc_gimbal_ctrl.o:	lib.h
-mmc_gimbal_ctrl:	mmc_gimbal_ctrl.o	lib.o
+all: mmc_gimbal_ctrl
+
+mmc_gimbal_ctrl: $(COBJS)
+	$(GCC) $(CFLAGS) $(COBJS) -o mmc_gimbal_ctrl $(LIBS)
+
+$(COBJS) : %.o : %.c
+	$(GCC) $(CFLAGS) -c $< -o $@
+
+clean :
+	rm mmc_gimbal_ctrl
+	rm *.o
