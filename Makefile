@@ -22,7 +22,7 @@ PROGRAMS = mmc_gimbal_ctrl
 
 all: $(PROGRAMS)
 	mkdir -p bin
-	cp -f $(PROGRAMS) bin
+	mv -f $(PROGRAMS) bin
 
 clean:
 	rm -f $(PROGRAMS) *.o

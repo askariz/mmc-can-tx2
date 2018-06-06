@@ -4,6 +4,9 @@
 *.la
 .deps
 .libs
+*.project
+bin
+*.bin
 
 configure
 libtool
