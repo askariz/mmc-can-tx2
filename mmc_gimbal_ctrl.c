@@ -22,101 +22,17 @@
 #include "mmc_protocol.h"
 
 #define DEBUG
-#define MAXIFNAMES 30 /* size of receive name index to omit ioctls */
-#define MAXCOL 6      /* number of different colors for colorized output */
 #define ANYDEV "any"  /* name of interface to receive from any CAN interface */
-#define ANL "\r\n"    /* newline in ASC mode */
 
 int sock;
-static char devname[MAXIFNAMES][IFNAMSIZ+1];
-static int  dindex[MAXIFNAMES];
-static int  max_devname_len; /* to prevent frazzled device name output */ 
-const int canfd_on = 1;
-
-struct cmsghdr *cmsg;
-can_err_mask_t err_mask;
+static char devname[IFNAMSIZ+1];
 extern struct canfd_frame can_frame;
 extern struct msghdr msg;
 static volatile int running = 1;
-
-
-uint8_t parse_buf[101];
-int buf_len = 0;
-void try_parse_can_info(uint8_t* data , uint8_t size){
-	memcpy(&parse_buf[buf_len],data,size);
-	buf_len += size;
-	if(parse_buf[0] == 0xa5){
-		if(buf_len >= parse_buf[2] + 2 || buf_len > 100){
-			buf_len = 0;
-			if(CRC8Software(&parse_buf[1],parse_buf[2]) == parse_buf[parse_buf[2] + 1]){
-				//  此处解析出一个can 包
-#ifdef DEBUG
-				printf("succes parse can info %02X %02X \n",parse_buf[0],parse_buf[1]);
-#endif
-			}
-		}
-	}else buf_len = 0;
-}
-
-int idx2dindex(int ifidx, int socket) {
-	int i;
-	struct ifreq ifr;
-
-	for (i=0; i < MAXIFNAMES; i++) {
-		if (dindex[i] == ifidx)
-			return i;
-	}
-
-	/* remove index cache zombies first */
-	for (i=0; i < MAXIFNAMES; i++) {
-		if (dindex[i]) {
-			ifr.ifr_ifindex = dindex[i];
-			if (ioctl(socket, SIOCGIFNAME, &ifr) < 0)
-				dindex[i] = 0;
-		}
-	}
-
-	for (i=0; i < MAXIFNAMES; i++)
-		if (!dindex[i]) /* free entry */
-			break;
-
-	if (i == MAXIFNAMES) {
-		fprintf(stderr, "Interface index cache only supports %d interfaces.\n",
-		       MAXIFNAMES);
-		exit(1);
-	}
-
-	dindex[i] = ifidx;
-
-	ifr.ifr_ifindex = ifidx;
-	if (ioctl(socket, SIOCGIFNAME, &ifr) < 0)
-		perror("SIOCGIFNAME");
-
-	if (max_devname_len < strlen(ifr.ifr_name))
-		max_devname_len = strlen(ifr.ifr_name);
-
-	strcpy(devname[i], ifr.ifr_name);
-
-#ifdef DEBUG
-	printf("new index %d (%s)\n", i, devname[i]);
-#endif
-
-	return i;
-}
-
 fd_set rdfs;
-
-unsigned char down_causes_exit = 1;
-unsigned char view = 0;
-int opt, ret;
-int  numfilter;
-int join_filter;
-
-struct sockaddr_can addr;
 char ctrlmsg[CMSG_SPACE(sizeof(struct timeval) + 3*sizeof(struct timespec) + sizeof(__u32))];
-struct iovec iov;
-struct ifreq ifr;
-struct timeval  *timeout_current = NULL;
+struct sockaddr_can addr;
+
 
 /*	Description	: init function for can device
  *	Parameters 	: 1 for sucess and -1 for failed
@@ -125,6 +41,9 @@ struct timeval  *timeout_current = NULL;
  */
 int init(){
 	char *dev_name = "can0";
+	struct ifreq ifr;
+	const int canfd_on = 1;
+
 #ifdef DEBUG
 	printf("open '%s'.\n",dev_name);
 #endif
@@ -134,13 +53,12 @@ int init(){
 		return -1;
 	}
 
-	max_devname_len = strlen(dev_name); /* no ',' found => no filter definitions */
+	int max_devname_len = strlen(dev_name); /* no ',' found => no filter definitions */
 	if (max_devname_len >= IFNAMSIZ) {
 	    printf("name of CAN device '%s' is too long!\n", dev_name);
 		return -1;
 	}
 	addr.can_family = AF_CAN;
-
 	memset(&ifr.ifr_name, 0, sizeof(ifr.ifr_name));
 	strncpy(ifr.ifr_name, dev_name, max_devname_len);
 
@@ -167,9 +85,10 @@ int init(){
 	return 1;
 }
 
-
 int main(int argc, char **argv)
 {
+	struct iovec iov;
+	unsigned char view = 0;
 	if(!init()){
 		printf("can init failed\n");
 		return 0;
@@ -233,7 +152,7 @@ int main(int argc, char **argv)
 		FD_ZERO(&rdfs);
 		FD_SET(sock, &rdfs);
 
-		if ((ret = select(sock+1, &rdfs, NULL, NULL, timeout_current)) <= 0) {
+		if (( select(sock+1, &rdfs, NULL, NULL, NULL)) <= 0) {
 			printf("select");
 			running = 0;
 			continue;
@@ -242,7 +161,6 @@ int main(int argc, char **argv)
 		{  /* check all CAN RAW sockets */
 
 			if (FD_ISSET(sock, &rdfs)) {
-				int idx;
 				/* these settings may be modified by recvmsg() */
 				iov.iov_len = sizeof(frame);
 				msg.msg_namelen = sizeof(addr);
@@ -250,31 +168,27 @@ int main(int argc, char **argv)
 				msg.msg_flags = 0;
 
 				int nbytes = recvmsg(sock, &msg, MSG_DONTWAIT);
-				idx = idx2dindex(addr.can_ifindex, sock);
 
 				if (nbytes < 0) {
-					if ((errno == ENETDOWN) && !down_causes_exit) {
-						fprintf(stderr, "%s: interface down\n", devname[idx]);
-						continue;
-					}
-					perror("read");
+					printf("recvmsg error \n");
 					return 1;
 				}
+
 				int maxdlen;
 				if ((size_t)nbytes == CAN_MTU)
 					maxdlen = CAN_MAX_DLEN;
 				else if ((size_t)nbytes == CANFD_MTU)
 					maxdlen = CANFD_MAX_DLEN;
 				else {
-					fprintf(stderr, "read: incomplete CAN frame\n");
+					printf("read: incomplete CAN frame\n");
 					return 1;
 				}
+
 
 				/* once we detected a EFF frame indent SFF frames accordingly */
 				if (frame.can_id & CAN_EFF_FLAG)
 					view |= CANLIB_VIEW_INDENT_SFF;
 #ifdef DEBUG
-				printf("%*s", max_devname_len, devname[idx]);
 				fprint_long_canframe(stdout, &frame, NULL, view, maxdlen);
 				printf("\n");
 #endif

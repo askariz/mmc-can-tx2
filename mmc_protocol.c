@@ -174,3 +174,21 @@ void ctrl_payload_new(int sock , uint16_t *data){
 		}
 	}
 }
+
+void try_parse_can_info(uint8_t* data , uint8_t size){
+	static int buf_len = 0;
+	static uint8_t parse_buf[101];
+	memcpy(&parse_buf[buf_len],data,size);
+	buf_len += size;
+	if(parse_buf[0] == 0xa5){
+		if(buf_len >= parse_buf[2] + 2 || buf_len > 100){
+			buf_len = 0;
+			if(CRC8Software(&parse_buf[1],parse_buf[2]) == parse_buf[parse_buf[2] + 1]){
+				//  此处解析出一个can 包
+#ifdef DEBUG
+				printf("succes parse can info %02X %02X \n",parse_buf[0],parse_buf[1]);
+#endif
+			}
+		}
+	}else buf_len = 0;
+}

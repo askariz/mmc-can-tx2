@@ -40,6 +40,7 @@ void ctrl_payload_new(int sock , uint16_t *data);
 void ctrl_payload_old(int sock ,uint16_t *buf , uint8_t size );
 uint32_t CRC32Software_1( uint8_t *pData, uint16_t Length );
 uint8_t CRC8Software(uint8_t *ptr, uint16_t len);
+void try_parse_can_info(uint8_t* data , uint8_t size);
 
 extern struct canfd_frame frame;
 extern struct msghdr msg;
